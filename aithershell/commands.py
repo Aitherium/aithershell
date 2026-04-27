@@ -22,7 +22,7 @@ import yaml
 
 from aithershell.config import AitherConfig, CONFIG_FILE, PLUGINS_DIR
 from aithershell.genesis_client import GenesisClient
-from aithershell.plugins import PluginRegistry
+from aithershell.shell_plugins import PluginRegistry
 
 logger = logging.getLogger(__name__)
 

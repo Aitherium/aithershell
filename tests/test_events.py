@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from aithershell.events import (
+from aithershell.pulse_events import (
     EventSeverity,
     PrivacyLevel,
     QueryContext,
@@ -242,3 +242,4 @@ class TestHelperFunctions:
         ctx = query_context_from_request()
         assert ctx.query_id is not None
         assert len(ctx.query_id) > 0
+

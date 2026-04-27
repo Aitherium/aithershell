@@ -27,7 +27,16 @@ from aithershell.shell import run_repl
 from aithershell.commands import execute_command, CommandError
 from aithershell.genesis_client import GenesisClient, GenesisError
 from aithershell.license import validate_license, enforce_license, get_tier
-from aithershell.ollama_client import OllamaClient, OllamaError, model_for_effort
+# Engine imports (merged from former adk.* namespace)
+from aithershell.llm.ollama import OllamaProvider
+from aithershell.llm.base import Message
+from aithershell.pairing import PairingManager
+
+
+# Local engine failure type — triggers cloud fallback in routing logic
+class OllamaError(Exception):
+    """Local engine failure — triggers cloud fallback if configured."""
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +76,7 @@ def setup_logging(verbose: bool = False):
 @click.option("--status", is_flag=True, help="Check Genesis health")
 @click.option("--history", type=int, help="Show history (optionally with count)")
 @click.option("--completions", type=click.Choice(["bash", "zsh", "fish", "pwsh"]), help="Generate shell completions")
+@click.version_option(version="1.1.0", prog_name="aither")
 @click.pass_context
 def cli(
     ctx,
@@ -146,12 +156,20 @@ def cli(
         return
     
     if init:
-        from aithershell.commands_local.init_cmd import run_init
-        sys.exit(run_init())
+        # Run the merged engine setup wizard
+        from aithershell.setup_cli import main as setup_main
+        try:
+            sys.exit(asyncio.run(setup_main()) or 0)
+        except SystemExit:
+            raise
+        except Exception as e:
+            click.secho(f"setup failed: {e}", fg="red", err=True)
+            sys.exit(1)
         return
 
     if link:
-        from aithershell.commands_local.link_portal import link_portal
+        # Portal API-key device-flow link
+        from aithershell.portal_link import link_portal
         ok = link_portal(aither_config)
         sys.exit(0 if ok else 1)
         return
@@ -240,21 +258,26 @@ async def _query_ollama(
     output_format: Optional[str],
     effort: int,
 ) -> None:
-    """Stream from local Ollama."""
-    model = config.model or backend.model or model_for_effort(effort)
-    timeout = config.routing.get("timeout_seconds", 120)
-    client = OllamaClient(backend.url, timeout=float(timeout))
+    """Stream from local Ollama via the merged engine OllamaProvider."""
+    model = config.model or backend.model or "nemotron-orchestrator:8b"
+    timeout = float(config.routing.get("timeout_seconds", 120))
+    provider = OllamaProvider(host=backend.url, default_model=model, timeout=timeout)
+
+    messages = [Message(role="user", content=query)]
     response = ""
     try:
-        async for chunk in client.chat_stream(
+        async for chunk in provider.chat_stream(
+            messages=messages,
             model=model,
-            message=query,
             temperature=config.temperature if config.temperature is not None else 0.7,
-            max_tokens=config.max_tokens,
+            max_tokens=config.max_tokens or 4096,
         ):
-            response += chunk
-            if config.stream and output_format != "json":
-                print(chunk, end="", flush=True)
+            if chunk.content:
+                response += chunk.content
+                if config.stream and output_format != "json":
+                    print(chunk.content, end="", flush=True)
+            if chunk.done:
+                break
 
         if config.stream and output_format != "json":
             print()
@@ -269,8 +292,9 @@ async def _query_ollama(
             }, indent=2))
         elif not config.stream:
             print(response)
-    finally:
-        await client.close()
+    except Exception as e:
+        # Translate engine errors into the unified error path
+        raise OllamaError(str(e)) from e
 
 
 async def _query_genesis(

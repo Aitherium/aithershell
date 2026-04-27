@@ -1,419 +1,288 @@
+"""Prometheus metrics — /metrics endpoint for ADK observability.
+
+Exports agent metering, tool execution, LLM latency, and health data
+as Prometheus-compatible metrics. Works with or without the
+prometheus_client library — falls back to a minimal text format exporter.
+
+Usage:
+    from aithershell.metrics import get_metrics, MetricsCollector
+
+    metrics = get_metrics()
+    metrics.record_llm_call(model="llama3.2", latency_ms=150, tokens=500)
+    metrics.record_tool_call(tool="web_search", latency_ms=42, success=True)
+    metrics.record_request(latency_ms=200, status_code=200)
+
+    # In server.py
+    @app.get("/metrics")
+    async def metrics_endpoint():
+        return PlainTextResponse(metrics.export(), media_type="text/plain")
 """
-AitherShell Prometheus Metrics System
-======================================
 
-Collects and exports Prometheus-compatible metrics:
-- Query metrics (count, duration, tokens)
-- Error tracking
-- Model performance
-- Cost tracking
-- Cache hit rates
+from __future__ import annotations
 
-Supports both direct Prometheus scraping (/metrics endpoint)
-and batch export to Pulse.
-"""
-
+import logging
 import threading
 import time
-from typing import Dict, Optional, List
-from enum import Enum
+from collections import defaultdict
 from dataclasses import dataclass, field
-import logging
-import sys
+from typing import Any, Dict, List
 
-logger = logging.getLogger("aithershell.telemetry")
-
-
-class MetricType(Enum):
-    """Prometheus metric types."""
-    COUNTER = "counter"
-    GAUGE = "gauge"
-    HISTOGRAM = "histogram"
+logger = logging.getLogger("adk.metrics")
 
 
 @dataclass
-class HistogramBucket:
-    """Histogram bucket configuration."""
-    le: float  # Less than or equal boundary
-    count: int = 0  # Cumulative count in bucket
-
-
-@dataclass
-class HistogramMetric:
-    """Histogram metric with buckets."""
-    name: str
-    help: str
-    buckets: List[float]
-    bucket_counts: Dict[float, int] = field(default_factory=dict)
-    sum: float = 0.0
+class _HistogramBucket:
+    """Simple histogram with fixed buckets for latency tracking."""
+    buckets: list[float] = field(default_factory=lambda: [
+        5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
+    ])
+    counts: dict[float, int] = field(default_factory=dict)
+    total: float = 0.0
     count: int = 0
-    
+
     def __post_init__(self):
-        # Initialize bucket counts
-        for bucket in self.buckets:
-            self.bucket_counts[bucket] = 0
-        self.bucket_counts[float('inf')] = 0
-    
-    def observe(self, value: float) -> None:
-        """Record a value in the histogram.
-        
-        Args:
-            value: Value to observe
-        """
-        self.sum += value
+        for b in self.buckets:
+            self.counts.setdefault(b, 0)
+        self.counts[float("inf")] = 0
+
+    def observe(self, value: float):
+        self.total += value
         self.count += 1
-        
-        # Update bucket counts
-        for bucket in self.buckets:
-            if value <= bucket:
-                self.bucket_counts[bucket] += 1
-        self.bucket_counts[float('inf')] += 1
-    
-    def to_prometheus(self) -> str:
-        """Export to Prometheus text format.
-        
-        Returns:
-            Prometheus-formatted metric lines
-        """
-        lines = [f"# HELP {self.name} {self.help}"]
-        lines.append(f"# TYPE {self.name} histogram")
-        
-        # Export buckets
-        for bucket in sorted(self.buckets):
-            count = self.bucket_counts.get(bucket, 0)
-            lines.append(f'{self.name}_bucket{{le="{bucket}"}} {count}')
-        
-        # +Inf bucket
-        lines.append(f'{self.name}_bucket{{le="+Inf"}} {self.bucket_counts[float("inf")]}')
-        
-        # Sum and count
-        lines.append(f"{self.name}_sum {self.sum}")
-        lines.append(f"{self.name}_count {self.count}")
-        
-        return "\n".join(lines)
+        for b in self.buckets:
+            if value <= b:
+                self.counts[b] += 1
+        self.counts[float("inf")] += 1
 
 
-@dataclass
-class CounterMetric:
-    """Counter metric."""
-    name: str
-    help: str
-    labels: Dict[str, str] = field(default_factory=dict)
-    value: int = 0
-    
-    def inc(self, amount: int = 1) -> None:
-        """Increment counter.
-        
-        Args:
-            amount: Amount to increment by
-        """
-        self.value += amount
-    
-    def to_prometheus(self) -> str:
-        """Export to Prometheus text format.
-        
-        Returns:
-            Prometheus-formatted metric lines
-        """
-        label_str = ""
-        if self.labels:
-            label_pairs = [f'{k}="{v}"' for k, v in self.labels.items()]
-            label_str = "{" + ",".join(label_pairs) + "}"
-        
-        return f"{self.name}{label_str} {self.value}"
+class MetricsCollector:
+    """Collects and exports Prometheus-format metrics.
 
-
-@dataclass
-class GaugeMetric:
-    """Gauge metric."""
-    name: str
-    help: str
-    labels: Dict[str, str] = field(default_factory=dict)
-    value: float = 0.0
-    
-    def set(self, value: float) -> None:
-        """Set gauge value.
-        
-        Args:
-            value: Value to set
-        """
-        self.value = value
-    
-    def inc(self, amount: float = 1.0) -> None:
-        """Increment gauge.
-        
-        Args:
-            amount: Amount to increment by
-        """
-        self.value += amount
-    
-    def dec(self, amount: float = 1.0) -> None:
-        """Decrement gauge.
-        
-        Args:
-            amount: Amount to decrement by
-        """
-        self.value -= amount
-    
-    def to_prometheus(self) -> str:
-        """Export to Prometheus text format.
-        
-        Returns:
-            Prometheus-formatted metric lines
-        """
-        label_str = ""
-        if self.labels:
-            label_pairs = [f'{k}="{v}"' for k, v in self.labels.items()]
-            label_str = "{" + ",".join(label_pairs) + "}"
-        
-        return f"{self.name}{label_str} {self.value}"
-
-
-class PrometheusMetricsCollector:
+    Thread-safe via a simple lock. Designed for low-overhead collection.
     """
-    Collects and manages Prometheus metrics for AitherShell.
-    
-    Metrics:
-    1. Counter: aithershell_queries_total{model="...", effort="..."}
-    2. Histogram: aithershell_query_duration_seconds (buckets: 1, 5, 10)
-    3. Histogram: aithershell_tokens_used (buckets: 500, 2000, 8000)
-    4. Counter: aithershell_errors_total{error_type="..."}
-    5. Counter: aithershell_model_cache_hits_total{model="..."}
-    6. Gauge: aithershell_cloud_compute_costs_usd_total
-    """
-    
-    def __init__(self, enabled: bool = True):
-        """Initialize metrics collector.
-        
-        Args:
-            enabled: Whether metrics collection is enabled
-        """
-        self.enabled = enabled
-        self.lock = threading.Lock()
-        
-        # Metrics storage
-        self.counters: Dict[str, CounterMetric] = {}
-        self.gauges: Dict[str, GaugeMetric] = {}
-        self.histograms: Dict[str, HistogramMetric] = {}
-        
-        # Initialize metrics
-        self._init_metrics()
-    
-    def _init_metrics(self) -> None:
-        """Initialize all metrics."""
-        with self.lock:
-            # 1. Query count with model and effort labels
-            # We'll use a counter per model+effort combination
-            
-            # 2. Query duration histogram (seconds)
-            self.histograms["aithershell_query_duration_seconds"] = HistogramMetric(
-                name="aithershell_query_duration_seconds",
-                help="Query execution duration in seconds",
-                buckets=[1.0, 5.0, 10.0],
-            )
-            
-            # 3. Tokens used histogram
-            self.histograms["aithershell_tokens_used"] = HistogramMetric(
-                name="aithershell_tokens_used",
-                help="Tokens used per query",
-                buckets=[500, 2000, 8000],
-            )
-            
-            # 6. Cloud compute costs gauge
-            self.gauges["aithershell_cloud_compute_costs_usd_total"] = GaugeMetric(
-                name="aithershell_cloud_compute_costs_usd_total",
-                help="Total cloud compute costs in USD",
-                value=0.0,
-            )
-    
-    def record_query(
+
+    def __init__(self):
+        self._lock = threading.Lock()
+
+        # Counters
+        self._requests_total = 0
+        self._requests_by_status: Dict[int, int] = defaultdict(int)
+        self._errors_total = 0
+
+        self._llm_calls_total = 0
+        self._llm_tokens_total = 0
+        self._llm_calls_by_model: Dict[str, int] = defaultdict(int)
+        self._llm_tokens_by_model: Dict[str, int] = defaultdict(int)
+        self._llm_errors_total = 0
+
+        self._tool_calls_total = 0
+        self._tool_calls_by_name: Dict[str, int] = defaultdict(int)
+        self._tool_errors_by_name: Dict[str, int] = defaultdict(int)
+
+        self._agent_spawns_total = 0
+        self._agent_spawns_by_type: Dict[str, int] = defaultdict(int)
+
+        self._sandbox_blocks_total = 0
+        self._loop_guard_breaks_total = 0
+        self._quota_breaches_total = 0
+
+        # Histograms
+        self._request_latency = _HistogramBucket()
+        self._llm_latency = _HistogramBucket()
+        self._tool_latency = _HistogramBucket()
+
+        # Gauges
+        self._active_sessions = 0
+        self._active_agents = 0
+        self._start_time = time.time()
+
+    # ─── Recording ──────────────────────────────────────────────────────
+
+    def record_request(self, latency_ms: float = 0, status_code: int = 200):
+        with self._lock:
+            self._requests_total += 1
+            self._requests_by_status[status_code] += 1
+            if status_code >= 500:
+                self._errors_total += 1
+            if latency_ms > 0:
+                self._request_latency.observe(latency_ms)
+
+    def record_llm_call(
         self,
-        duration_ms: float,
-        tokens_used: int,
-        model: Optional[str] = None,
-        effort: Optional[int] = None,
-        cached: bool = False,
-    ) -> None:
-        """Record a completed query.
-        
-        Args:
-            duration_ms: Query duration in milliseconds
-            tokens_used: Tokens consumed
-            model: Model used
-            effort: Effort level
-            cached: Whether response was cached
-        """
-        if not self.enabled:
-            return
-        
-        with self.lock:
-            # 1. Increment query counter
-            counter_key = f"aithershell_queries_total{{{model or 'unknown'}:{effort or 0}}}"
-            if counter_key not in self.counters:
-                labels = {}
-                if model:
-                    labels["model"] = model
-                if effort:
-                    labels["effort"] = str(effort)
-                self.counters[counter_key] = CounterMetric(
-                    name="aithershell_queries_total",
-                    help="Total queries executed",
-                    labels=labels,
-                )
-            self.counters[counter_key].inc()
-            
-            # 2. Record duration (convert ms to seconds)
-            duration_sec = duration_ms / 1000.0
-            self.histograms["aithershell_query_duration_seconds"].observe(duration_sec)
-            
-            # 3. Record tokens used
-            self.histograms["aithershell_tokens_used"].observe(tokens_used)
-            
-            # 5. Track cache hits if applicable
-            if cached and model:
-                cache_hit_key = f"aithershell_model_cache_hits_total{{{model}}}"
-                if cache_hit_key not in self.counters:
-                    self.counters[cache_hit_key] = CounterMetric(
-                        name="aithershell_model_cache_hits_total",
-                        help="Cache hits per model",
-                        labels={"model": model},
-                    )
-                self.counters[cache_hit_key].inc()
-    
-    def record_error(
+        model: str = "",
+        latency_ms: float = 0,
+        tokens: int = 0,
+        success: bool = True,
+    ):
+        with self._lock:
+            self._llm_calls_total += 1
+            self._llm_tokens_total += tokens
+            if model:
+                self._llm_calls_by_model[model] += 1
+                self._llm_tokens_by_model[model] += tokens
+            if not success:
+                self._llm_errors_total += 1
+            if latency_ms > 0:
+                self._llm_latency.observe(latency_ms)
+
+    def record_tool_call(
         self,
-        error_type: str,
-    ) -> None:
-        """Record an error.
-        
-        Args:
-            error_type: Type of error (e.g., "api_timeout")
-        """
-        if not self.enabled:
-            return
-        
-        with self.lock:
-            # 4. Increment error counter
-            error_key = f"aithershell_errors_total{{{error_type}}}"
-            if error_key not in self.counters:
-                self.counters[error_key] = CounterMetric(
-                    name="aithershell_errors_total",
-                    help="Total errors by type",
-                    labels={"error_type": error_type},
-                )
-            self.counters[error_key].inc()
-    
-    def set_cost(self, cost_usd: float) -> None:
-        """Set total cloud compute cost.
-        
-        Args:
-            cost_usd: Total cost in USD
-        """
-        if not self.enabled:
-            return
-        
-        with self.lock:
-            self.gauges["aithershell_cloud_compute_costs_usd_total"].set(cost_usd)
-    
-    def inc_cost(self, delta_usd: float) -> None:
-        """Increment total cloud compute cost.
-        
-        Args:
-            delta_usd: Cost delta in USD
-        """
-        if not self.enabled:
-            return
-        
-        with self.lock:
-            self.gauges["aithershell_cloud_compute_costs_usd_total"].inc(delta_usd)
-    
-    def to_prometheus_text(self) -> str:
-        """Export all metrics to Prometheus text format.
-        
-        Returns:
-            Prometheus-compatible metric text
-        """
-        with self.lock:
-            lines = []
-            
-            # Counters
-            for counter in self.counters.values():
-                lines.append(f"# HELP {counter.name} {counter.help}")
-                lines.append(f"# TYPE {counter.name} counter")
-                lines.append(counter.to_prometheus())
-                lines.append("")
-            
-            # Gauges
-            for gauge in self.gauges.values():
-                lines.append(f"# HELP {gauge.name} {gauge.help}")
-                lines.append(f"# TYPE {gauge.name} gauge")
-                lines.append(gauge.to_prometheus())
-                lines.append("")
-            
-            # Histograms
-            for histogram in self.histograms.values():
-                lines.append(f"# HELP {histogram.name} {histogram.help}")
-                lines.append(f"# TYPE {histogram.name} histogram")
-                lines.append(histogram.to_prometheus())
-                lines.append("")
-            
-            return "\n".join(lines)
-    
-    def to_json(self) -> Dict:
-        """Export metrics as JSON for batch transmission.
-        
-        Returns:
-            Dictionary with all metrics
-        """
-        with self.lock:
-            metrics = {
-                "counters": {},
-                "gauges": {},
-                "histograms": {},
-                "timestamp": time.time(),
-            }
-            
-            for key, counter in self.counters.items():
-                metrics["counters"][key] = {
-                    "value": counter.value,
-                    "labels": counter.labels,
-                }
-            
-            for key, gauge in self.gauges.items():
-                metrics["gauges"][key] = {
-                    "value": gauge.value,
-                    "labels": gauge.labels,
-                }
-            
-            for key, histogram in self.histograms.items():
-                metrics["histograms"][key] = {
-                    "sum": histogram.sum,
-                    "count": histogram.count,
-                    "buckets": histogram.bucket_counts,
-                }
-            
-            return metrics
+        tool: str = "",
+        latency_ms: float = 0,
+        success: bool = True,
+    ):
+        with self._lock:
+            self._tool_calls_total += 1
+            if tool:
+                self._tool_calls_by_name[tool] += 1
+                if not success:
+                    self._tool_errors_by_name[tool] += 1
+            if latency_ms > 0:
+                self._tool_latency.observe(latency_ms)
+
+    def record_agent_spawn(self, agent_type: str = ""):
+        with self._lock:
+            self._agent_spawns_total += 1
+            if agent_type:
+                self._agent_spawns_by_type[agent_type] += 1
+
+    def record_sandbox_block(self):
+        with self._lock:
+            self._sandbox_blocks_total += 1
+
+    def record_loop_guard_break(self):
+        with self._lock:
+            self._loop_guard_breaks_total += 1
+
+    def record_quota_breach(self):
+        with self._lock:
+            self._quota_breaches_total += 1
+
+    def set_active_sessions(self, count: int):
+        self._active_sessions = count
+
+    def set_active_agents(self, count: int):
+        self._active_agents = count
+
+    # ─── Export ──────────────────────────────────────────────────────────
+
+    def export(self) -> str:
+        """Export all metrics in Prometheus text exposition format."""
+        lines: list[str] = []
+
+        with self._lock:
+            # ── Request metrics ──
+            lines.append("# HELP adk_requests_total Total HTTP requests")
+            lines.append("# TYPE adk_requests_total counter")
+            lines.append(f"adk_requests_total {self._requests_total}")
+
+            for code, count in sorted(self._requests_by_status.items()):
+                lines.append(f'adk_requests_by_status{{code="{code}"}} {count}')
+
+            lines.append("# HELP adk_errors_total Total server errors (5xx)")
+            lines.append("# TYPE adk_errors_total counter")
+            lines.append(f"adk_errors_total {self._errors_total}")
+
+            self._export_histogram(lines, "adk_request_latency_ms", self._request_latency,
+                                   "Request latency in milliseconds")
+
+            # ── LLM metrics ──
+            lines.append("# HELP adk_llm_calls_total Total LLM calls")
+            lines.append("# TYPE adk_llm_calls_total counter")
+            lines.append(f"adk_llm_calls_total {self._llm_calls_total}")
+
+            lines.append("# HELP adk_llm_tokens_total Total tokens consumed")
+            lines.append("# TYPE adk_llm_tokens_total counter")
+            lines.append(f"adk_llm_tokens_total {self._llm_tokens_total}")
+
+            lines.append("# HELP adk_llm_errors_total Total LLM errors")
+            lines.append("# TYPE adk_llm_errors_total counter")
+            lines.append(f"adk_llm_errors_total {self._llm_errors_total}")
+
+            for model, count in sorted(self._llm_calls_by_model.items()):
+                lines.append(f'adk_llm_calls_by_model{{model="{model}"}} {count}')
+
+            for model, tokens in sorted(self._llm_tokens_by_model.items()):
+                lines.append(f'adk_llm_tokens_by_model{{model="{model}"}} {tokens}')
+
+            self._export_histogram(lines, "adk_llm_latency_ms", self._llm_latency,
+                                   "LLM call latency in milliseconds")
+
+            # ── Tool metrics ──
+            lines.append("# HELP adk_tool_calls_total Total tool calls")
+            lines.append("# TYPE adk_tool_calls_total counter")
+            lines.append(f"adk_tool_calls_total {self._tool_calls_total}")
+
+            for tool, count in sorted(self._tool_calls_by_name.items()):
+                lines.append(f'adk_tool_calls_by_name{{tool="{tool}"}} {count}')
+
+            for tool, count in sorted(self._tool_errors_by_name.items()):
+                lines.append(f'adk_tool_errors_by_name{{tool="{tool}"}} {count}')
+
+            self._export_histogram(lines, "adk_tool_latency_ms", self._tool_latency,
+                                   "Tool call latency in milliseconds")
+
+            # ── Agent metrics ──
+            lines.append("# HELP adk_agent_spawns_total Total agent spawns")
+            lines.append("# TYPE adk_agent_spawns_total counter")
+            lines.append(f"adk_agent_spawns_total {self._agent_spawns_total}")
+
+            for agent, count in sorted(self._agent_spawns_by_type.items()):
+                lines.append(f'adk_agent_spawns_by_type{{agent="{agent}"}} {count}')
+
+            # ── Security metrics ──
+            lines.append("# HELP adk_sandbox_blocks_total Sandbox capability denials")
+            lines.append("# TYPE adk_sandbox_blocks_total counter")
+            lines.append(f"adk_sandbox_blocks_total {self._sandbox_blocks_total}")
+
+            lines.append("# HELP adk_loop_guard_breaks_total LoopGuard circuit breaks")
+            lines.append("# TYPE adk_loop_guard_breaks_total counter")
+            lines.append(f"adk_loop_guard_breaks_total {self._loop_guard_breaks_total}")
+
+            lines.append("# HELP adk_quota_breaches_total Quota hard limit breaches")
+            lines.append("# TYPE adk_quota_breaches_total counter")
+            lines.append(f"adk_quota_breaches_total {self._quota_breaches_total}")
+
+            # ── Gauges ──
+            lines.append("# HELP adk_active_sessions Current active sessions")
+            lines.append("# TYPE adk_active_sessions gauge")
+            lines.append(f"adk_active_sessions {self._active_sessions}")
+
+            lines.append("# HELP adk_active_agents Current active agents")
+            lines.append("# TYPE adk_active_agents gauge")
+            lines.append(f"adk_active_agents {self._active_agents}")
+
+            lines.append("# HELP adk_uptime_seconds Server uptime")
+            lines.append("# TYPE adk_uptime_seconds gauge")
+            lines.append(f"adk_uptime_seconds {time.time() - self._start_time:.1f}")
+
+        return "\n".join(lines) + "\n"
+
+    def _export_histogram(
+        self,
+        lines: list[str],
+        name: str,
+        hist: _HistogramBucket,
+        help_text: str,
+    ):
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} histogram")
+        for bucket in hist.buckets:
+            lines.append(f'{name}_bucket{{le="{bucket}"}} {hist.counts.get(bucket, 0)}')
+        lines.append(f'{name}_bucket{{le="+Inf"}} {hist.counts.get(float("inf"), 0)}')
+        lines.append(f"{name}_sum {hist.total:.1f}")
+        lines.append(f"{name}_count {hist.count}")
 
 
-# Global instance
-_global_collector: Optional[PrometheusMetricsCollector] = None
-_collector_lock = threading.Lock()
+# ─────────────────────────────────────────────────────────────────────────────
+# Module singleton
+# ─────────────────────────────────────────────────────────────────────────────
+
+_instance: MetricsCollector | None = None
 
 
-def get_metrics_collector(enabled: bool = True) -> PrometheusMetricsCollector:
-    """Get or create global metrics collector.
-    
-    Args:
-        enabled: Whether to enable metrics collection
-        
-    Returns:
-        Global PrometheusMetricsCollector instance
-    """
-    global _global_collector
-    
-    if _global_collector is None:
-        with _collector_lock:
-            if _global_collector is None:
-                _global_collector = PrometheusMetricsCollector(enabled=enabled)
-    
-    return _global_collector
+def get_metrics() -> MetricsCollector:
+    """Get or create the module-level MetricsCollector singleton."""
+    global _instance
+    if _instance is None:
+        _instance = MetricsCollector()
+    return _instance

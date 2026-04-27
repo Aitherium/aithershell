@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 import yaml
 
-from aithershell.plugins import (
+from aithershell.shell_plugins import (
     Plugin,
     PluginRegistry,
     PluginError,
@@ -254,3 +254,4 @@ class TestPluginErrors:
         """Test PluginCapabilityError."""
         error = PluginCapabilityError("Unauthorized")
         assert isinstance(error, PluginError)
+
