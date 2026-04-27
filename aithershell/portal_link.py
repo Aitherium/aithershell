@@ -23,15 +23,18 @@ from aithershell.config import AitherConfig, save_config
 
 
 PORTAL_BASE_DEFAULT = "https://portal.aitherium.com"
-DEVICE_CODE_PATH = "/api/auth/device/code"
-DEVICE_POLL_PATH = "/api/auth/device/poll"
+IDP_BASE_DEFAULT = "https://idp.aitherium.com"
+# AitherIdentity device-code endpoints (talk to IDP directly, not Portal)
+DEVICE_CODE_PATH = "/auth/device/code"
+DEVICE_POLL_PATH = "/auth/device/token"
 LINK_PAGE_PATH = "/link"
 
 
 async def _request_device_code(
+    idp_url: str,
     portal_url: str,
 ) -> Optional[Tuple[str, str, int, str]]:
-    """Ask portal for a device code.
+    """Ask IDP for a device code.
 
     Returns (device_code, user_code, interval, verification_uri_complete)
     or None if endpoint unavailable.
@@ -39,11 +42,12 @@ async def _request_device_code(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
-                f"{portal_url}{DEVICE_CODE_PATH}",
+                f"{idp_url}{DEVICE_CODE_PATH}",
                 json={"client_name": "AitherShell", "scopes": ["read", "write", "agent"]},
             )
             if r.status_code == 200:
                 data = r.json()
+                # Prefer IDP-supplied URL; fall back to portal /link.
                 vuri = data.get("verification_uri_complete") or (
                     f"{portal_url}{LINK_PAGE_PATH}?code={data['user_code']}"
                 )
@@ -59,11 +63,11 @@ async def _request_device_code(
 
 
 async def _poll_for_token(
-    portal_url: str, device_code: str, interval: int, timeout_s: int = 600
+    idp_url: str, device_code: str, interval: int, timeout_s: int = 600
 ) -> Optional[dict]:
-    """Poll until user approves and we get credentials.
+    """Poll IDP until user approves and we get credentials.
 
-    Returns dict with keys: api_key, license_key, user_id, tier, email
+    Returns dict with keys: api_key/access_token, license_key, user, tier
     or None on denial/timeout.
     """
     deadline = time.time() + timeout_s
@@ -71,15 +75,16 @@ async def _poll_for_token(
         while time.time() < deadline:
             try:
                 r = await client.post(
-                    f"{portal_url}{DEVICE_POLL_PATH}",
+                    f"{idp_url}{DEVICE_POLL_PATH}",
                     json={"device_code": device_code},
                 )
                 if r.status_code == 200:
                     data = r.json()
-                    if data.get("api_key") or data.get("license_key"):
+                    if data.get("status") == "complete":
                         return data
-                    if data.get("status") == "denied":
+                    if data.get("status") in ("denied", "access_denied"):
                         return None
+                    # status == "authorization_pending" → keep polling
             except Exception:
                 pass
             await asyncio.sleep(interval)
@@ -97,15 +102,16 @@ def _open_browser(url: str) -> None:
 async def link_portal_async(
     cfg: AitherConfig,
     portal_url: str = PORTAL_BASE_DEFAULT,
+    idp_url: str = IDP_BASE_DEFAULT,
 ) -> bool:
     """Run the device-code flow and persist the API key.
 
-    Returns True if linked successfully, False otherwise.
-    Falls back to manual key entry if portal device flow isn't deployed yet.
+    CLI talks DIRECTLY to AitherIdentity (idp.aitherium.com). Portal hosts
+    the /link page where the user signs in and authorizes the device.
     """
-    click.secho(f"\n→ Linking AitherShell to {portal_url}", fg="cyan")
+    click.secho(f"\n→ Linking AitherShell via {idp_url}", fg="cyan")
 
-    code_info = await _request_device_code(portal_url)
+    code_info = await _request_device_code(idp_url, portal_url)
 
     if code_info:
         device_code, user_code, interval, link_url = code_info
@@ -122,7 +128,7 @@ async def link_portal_async(
 
         click.secho("\n  Waiting for approval (Ctrl+C to cancel)...", fg="white")
         try:
-            creds = await _poll_for_token(portal_url, device_code, interval)
+            creds = await _poll_for_token(idp_url, device_code, interval)
         except KeyboardInterrupt:
             click.secho("\n  Cancelled.", fg="yellow")
             return False
@@ -131,10 +137,11 @@ async def link_portal_async(
             click.secho("  Linking failed or denied.", fg="red")
             return False
 
-        # Persist API key (for cloud backend) and license key (for local CLI gate)
-        api_key = creds.get("api_key", "")
+        # IDP returns access_token + api_key (alias) + license_key + tier + user
+        api_key = creds.get("api_key") or creds.get("access_token", "")
         license_key = creds.get("license_key", "")
-        email = creds.get("email", "")
+        user_obj = creds.get("user", {}) or {}
+        email = user_obj.get("email") or creds.get("email", "")
         tier = creds.get("tier", "free")
 
         if api_key:
@@ -154,9 +161,9 @@ async def link_portal_async(
             click.secho("  ✓ License key saved to ~/.aither/license.key", fg="green")
         return True
 
-    # Fallback: manual key entry (portal device flow not deployed yet)
+    # Fallback: manual key entry (IDP unreachable / device flow not deployed)
     click.secho(
-        "\n  Portal device flow not available yet. Falling back to manual entry.",
+        "\n  IDP device flow not available. Falling back to manual entry.",
         fg="yellow",
     )
     fallback_url = f"{portal_url}/login?return=/settings/api-keys"
@@ -208,10 +215,15 @@ def _save_license(license_key: str) -> None:
 
 
 def link_portal(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEFAULT) -> bool:
-    """Sync wrapper for CLI use. Honors AITHER_PORTAL_URL env var override."""
+    """Sync wrapper for CLI use.
+
+    Honors AITHER_PORTAL_URL (browser /link host) and AITHER_IDP_URL
+    (CLI device-code endpoints) env vars for dev/staging overrides.
+    """
     import os
     portal_url = os.environ.get("AITHER_PORTAL_URL", portal_url).rstrip("/")
-    return asyncio.run(link_portal_async(cfg, portal_url))
+    idp_url = os.environ.get("AITHER_IDP_URL", IDP_BASE_DEFAULT).rstrip("/")
+    return asyncio.run(link_portal_async(cfg, portal_url, idp_url))
 
 
 def authenticate_or_exit(portal_url: str = PORTAL_BASE_DEFAULT) -> bool:
