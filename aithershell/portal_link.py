@@ -23,28 +23,38 @@ from aithershell.config import AitherConfig, save_config
 
 
 PORTAL_BASE_DEFAULT = "https://portal.aitherium.com"
-DEVICE_CODE_PATH = "/api/auth/device/code"
-DEVICE_POLL_PATH = "/api/auth/device/poll"
+GATEWAY_BASE_DEFAULT = "https://gateway.aitherium.com"
+DEVICE_CODE_PATH = "/v1/auth/device/code"
+DEVICE_POLL_PATH = "/v1/auth/device/poll"
 LINK_PAGE_PATH = "/link"
 
 
-async def _request_device_code(portal_url: str) -> Optional[Tuple[str, str, int]]:
-    """Ask portal for a device code.
+async def _request_device_code(
+    gateway_url: str,
+    portal_url: str,
+) -> Optional[Tuple[str, str, int, str]]:
+    """Ask gateway for a device code.
 
-    Returns (device_code, user_code, interval) or None if endpoint unavailable.
+    Returns (device_code, user_code, interval, verification_uri_complete)
+    or None if endpoint unavailable.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
-                f"{portal_url}{DEVICE_CODE_PATH}",
-                json={"client": "aithershell", "version": "1.0"},
+                f"{gateway_url}{DEVICE_CODE_PATH}",
+                json={"client_name": "AitherShell", "scopes": ["read", "write", "agent"]},
             )
             if r.status_code == 200:
                 data = r.json()
+                # Prefer gateway-supplied URL; fall back to local construction.
+                vuri = data.get("verification_uri_complete") or (
+                    f"{portal_url}{LINK_PAGE_PATH}?code={data['user_code']}"
+                )
                 return (
                     data["device_code"],
                     data["user_code"],
-                    data.get("interval", 3),
+                    data.get("interval", 5),
+                    vuri,
                 )
     except Exception:
         pass
@@ -52,7 +62,7 @@ async def _request_device_code(portal_url: str) -> Optional[Tuple[str, str, int]
 
 
 async def _poll_for_token(
-    portal_url: str, device_code: str, interval: int, timeout_s: int = 600
+    gateway_url: str, device_code: str, interval: int, timeout_s: int = 600
 ) -> Optional[dict]:
     """Poll until user approves and we get credentials.
 
@@ -64,7 +74,7 @@ async def _poll_for_token(
         while time.time() < deadline:
             try:
                 r = await client.post(
-                    f"{portal_url}{DEVICE_POLL_PATH}",
+                    f"{gateway_url}{DEVICE_POLL_PATH}",
                     json={"device_code": device_code},
                 )
                 if r.status_code == 200:
@@ -87,7 +97,11 @@ def _open_browser(url: str) -> None:
         pass
 
 
-async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEFAULT) -> bool:
+async def link_portal_async(
+    cfg: AitherConfig,
+    portal_url: str = PORTAL_BASE_DEFAULT,
+    gateway_url: str = GATEWAY_BASE_DEFAULT,
+) -> bool:
     """Run the device-code flow and persist the API key.
 
     Returns True if linked successfully, False otherwise.
@@ -95,12 +109,11 @@ async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEF
     """
     click.secho(f"\n→ Linking AitherShell to {portal_url}", fg="cyan")
 
-    # Try device flow
-    code_info = await _request_device_code(portal_url)
+    # Try device flow (against gateway, which is the dynamic API surface)
+    code_info = await _request_device_code(gateway_url, portal_url)
 
     if code_info:
-        device_code, user_code, interval = code_info
-        link_url = f"{portal_url}{LINK_PAGE_PATH}?code={user_code}"
+        device_code, user_code, interval, link_url = code_info
 
         click.secho("\n  Visit:", fg="white")
         click.secho(f"    {link_url}", fg="bright_blue", underline=True)
@@ -114,7 +127,7 @@ async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEF
 
         click.secho("\n  Waiting for approval (Ctrl+C to cancel)...", fg="white")
         try:
-            creds = await _poll_for_token(portal_url, device_code, interval)
+            creds = await _poll_for_token(gateway_url, device_code, interval)
         except KeyboardInterrupt:
             click.secho("\n  Cancelled.", fg="yellow")
             return False
@@ -151,9 +164,13 @@ async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEF
         "\n  Portal device flow not available yet. Falling back to manual entry.",
         fg="yellow",
     )
-    click.secho(f"  1. Sign in at {portal_url}", fg="white")
-    click.secho("  2. Generate an API key in your account settings", fg="white")
-    click.secho("  3. Paste it below (or press Enter to skip)\n", fg="white")
+    fallback_url = f"{portal_url}/login?return=/settings/api-keys"
+    click.secho(f"  1. Opening browser: {fallback_url}", fg="white")
+    click.secho("  2. Sign in (or create an account)", fg="white")
+    click.secho("  3. Generate an API key in Settings → API Keys", fg="white")
+    click.secho("  4. Paste it below (or press Enter to skip)\n", fg="white")
+
+    _open_browser(fallback_url)
 
     api_key = click.prompt("  API key", default="", show_default=False, hide_input=True)
     api_key = api_key.strip()
