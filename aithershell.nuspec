@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>aithershell</id>
+    <title>AitherShell</title>
+    <version>1.0.0</version>
+    <authors>Aitherium</authors>
+    <owners>Aitherium</owners>
+    <summary>AitherShell - Run AI agents from your terminal</summary>
+    <description>
+AitherShell is a closed-source commercial CLI for running AI agents from your terminal.
+
+Features:
+- Interactive REPL with command history
+- Multiple output formats (text, JSON, private)
+- 12 AI personas with unique perspectives
+- License-based pricing (free/pro/enterprise)
+- No external dependencies
+
+Quick Start:
+1. Set your license key: setx AITHERIUM_LICENSE_KEY "your-key"
+2. Run: aither --help
+3. Get a license: https://aitherium.com/free
+
+Support: support@aitherium.com
+Docs: https://docs.aitherium.com/aithershell
+    </description>
+    <projectUrl>https://aitherium.com/aithershell</projectUrl>
+    <projectSourceUrl>https://github.com/Aitherium/aithershell</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/Aitherium/aithershell/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/Aitherium/aithershell/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <iconUrl>https://aitherium.com/images/aithershell-icon.png</iconUrl>
+    <releaseNotes>
+## AitherShell v1.0.0 - Production Release
+
+✅ Compiled Windows binary (86 MB aither.exe)
+✅ License key validation (free/pro/enterprise tiers)
+✅ Interactive REPL with command history
+✅ Multiple output formats (text, JSON, private)
+✅ 12 AI personas support
+✅ Safety levels (paranoid, strict, professional, relaxed)
+✅ Effort-based model routing (1-10)
+
+See https://github.com/Aitherium/aithershell/releases/v1.0.0 for full details.
+    </releaseNotes>
+    <tags>ai agents cli terminal aitheros</tags>
+    <dependencies>
+      <!-- No dependencies - standalone binary -->
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="aither.exe" target="tools\aither.exe" />
+    <file src="chocolateyinstall.ps1" target="tools\chocolateyinstall.ps1" />
+    <file src="chocolateyuninstall.ps1" target="tools\chocolateyuninstall.ps1" />
+    <file src="VERIFICATION.txt" target="tools\VERIFICATION.txt" />
+  </files>
+</package>
