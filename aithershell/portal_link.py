@@ -51,8 +51,14 @@ async def _request_device_code(portal_url: str) -> Optional[Tuple[str, str, int]
     return None
 
 
-async def _poll_for_token(portal_url: str, device_code: str, interval: int, timeout_s: int = 600) -> Optional[str]:
-    """Poll until user approves and we get an API key."""
+async def _poll_for_token(
+    portal_url: str, device_code: str, interval: int, timeout_s: int = 600
+) -> Optional[dict]:
+    """Poll until user approves and we get credentials.
+
+    Returns dict with keys: api_key, license_key, user_id, tier, email
+    or None on denial/timeout.
+    """
     deadline = time.time() + timeout_s
     async with httpx.AsyncClient(timeout=10.0) as client:
         while time.time() < deadline:
@@ -63,8 +69,8 @@ async def _poll_for_token(portal_url: str, device_code: str, interval: int, time
                 )
                 if r.status_code == 200:
                     data = r.json()
-                    if data.get("api_key"):
-                        return data["api_key"]
+                    if data.get("api_key") or data.get("license_key"):
+                        return data
                     if data.get("status") == "denied":
                         return None
             except Exception:
@@ -108,22 +114,36 @@ async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEF
 
         click.secho("\n  Waiting for approval (Ctrl+C to cancel)...", fg="white")
         try:
-            api_key = await _poll_for_token(portal_url, device_code, interval)
+            creds = await _poll_for_token(portal_url, device_code, interval)
         except KeyboardInterrupt:
             click.secho("\n  Cancelled.", fg="yellow")
             return False
 
-        if not api_key:
+        if not creds:
             click.secho("  Linking failed or denied.", fg="red")
             return False
 
-        # Persist
-        cfg.api_key = api_key
-        if "cloud" in cfg.backends:
-            cfg.backends["cloud"]["api_key"] = api_key
-            cfg.backends["cloud"]["url"] = portal_url
-        save_config(cfg)
-        click.secho("  ✓ Linked successfully. API key saved to ~/.aither/config.yaml", fg="green")
+        # Persist API key (for cloud backend) and license key (for local CLI gate)
+        api_key = creds.get("api_key", "")
+        license_key = creds.get("license_key", "")
+        email = creds.get("email", "")
+        tier = creds.get("tier", "free")
+
+        if api_key:
+            cfg.api_key = api_key
+            if "cloud" in cfg.backends:
+                cfg.backends["cloud"]["api_key"] = api_key
+                cfg.backends["cloud"]["url"] = portal_url
+            save_config(cfg)
+
+        if license_key:
+            _save_license(license_key)
+
+        click.secho(f"\n  ✓ Signed in as {email or 'user'} ({tier} tier)", fg="green", bold=True)
+        if api_key:
+            click.secho("  ✓ API key saved to ~/.aither/config.yaml", fg="green")
+        if license_key:
+            click.secho("  ✓ License key saved to ~/.aither/license.key", fg="green")
         return True
 
     # Fallback: manual key entry (portal device flow not deployed yet)
@@ -138,7 +158,7 @@ async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEF
     api_key = click.prompt("  API key", default="", show_default=False, hide_input=True)
     api_key = api_key.strip()
     if not api_key:
-        click.secho("  Skipped. You can run `aither link` later.", fg="yellow")
+        click.secho("  Skipped. You can run `aither auth` later.", fg="yellow")
         return False
 
     cfg.api_key = api_key
@@ -147,9 +167,71 @@ async def link_portal_async(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEF
         cfg.backends["cloud"]["url"] = portal_url
     save_config(cfg)
     click.secho("  ✓ API key saved to ~/.aither/config.yaml", fg="green")
+
+    # Optional: paste a license key too
+    license_key = click.prompt(
+        "  License key (optional, get from portal account page)",
+        default="",
+        show_default=False,
+        hide_input=True,
+    ).strip()
+    if license_key:
+        _save_license(license_key)
+        click.secho("  ✓ License key saved to ~/.aither/license.key", fg="green")
     return True
+
+
+def _save_license(license_key: str) -> None:
+    """Persist license key to ~/.aither/license.key (mode 0600 on POSIX)."""
+    from pathlib import Path
+    import os
+
+    license_path = Path.home() / ".aither" / "license.key"
+    license_path.parent.mkdir(parents=True, exist_ok=True)
+    license_path.write_text(license_key.strip() + "\n", encoding="utf-8")
+    try:
+        os.chmod(license_path, 0o600)
+    except (OSError, NotImplementedError):
+        pass  # Windows or restricted FS
 
 
 def link_portal(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEFAULT) -> bool:
     """Sync wrapper for CLI use."""
     return asyncio.run(link_portal_async(cfg, portal_url))
+
+
+def authenticate_or_exit(portal_url: str = PORTAL_BASE_DEFAULT) -> bool:
+    """First-run auth flow triggered when no license is found.
+
+    Asks user to authenticate via browser (device-code flow with their
+    AitherIdentity account). On success, license + API key are saved and
+    the user can re-run their command.
+
+    Returns True if authentication succeeded.
+    """
+    from aithershell.config import load_config
+
+    click.secho("\n  Welcome to AitherShell!", fg="cyan", bold=True)
+    click.secho(
+        "  No license found. Sign in with your Aitherium account to continue.\n",
+        fg="white",
+    )
+    click.secho(
+        "    • Free tier: 5 queries/day, all local features",
+        fg="white",
+    )
+    click.secho(
+        "    • Pro tier:  Unlimited, cloud fallback, priority support\n",
+        fg="white",
+    )
+
+    if not click.confirm("  Open browser to sign in?", default=True):
+        click.secho(
+            f"\n  No problem. Sign in any time at {portal_url}",
+            fg="yellow",
+        )
+        click.secho("  Then run:  aither auth", fg="yellow")
+        return False
+
+    cfg = load_config()
+    return link_portal(cfg, portal_url)

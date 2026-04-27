@@ -67,7 +67,7 @@ def setup_logging(verbose: bool = False):
 @click.option("--temperature", type=click.FloatRange(0.0, 2.0), help="Sampling temperature")
 @click.option("--verbose", is_flag=True, help="Verbose logging")
 @click.option("--init", is_flag=True, help="Run setup wizard (`aither init`)")
-@click.option("--link", is_flag=True, help="Link to AitherOS Portal for cloud fallback")
+@click.option("--link", "--auth", "link", is_flag=True, help="Sign in via browser to your Aitherium account")
 @click.option("--local", "force_backend", flag_value="local", help="Force local backend (Ollama)")
 @click.option("--cloud", "force_backend", flag_value="cloud", help="Force cloud backend (Portal)")
 @click.option("--genesis", "force_backend", flag_value="genesis", help="Force Genesis backend")
@@ -113,14 +113,30 @@ def cli(
         aither --status                     # Check Genesis health
     """
     setup_logging(verbose)
-    
+
     # Check license first (before any other action)
     is_valid, license_msg = validate_license()
     if not is_valid and not (init or link or completions):
-        click.secho(f"❌ {license_msg}", fg="red", err=True)
-        click.secho("Get your license at: https://aitherium.com/free", fg="yellow", err=True)
-        sys.exit(1)
-    
+        # No license — kick off browser auth flow with their AitherIdentity account
+        from aithershell.portal_link import authenticate_or_exit
+        authed = authenticate_or_exit()
+        if not authed:
+            sys.exit(1)
+        # Re-validate after auth
+        is_valid, license_msg = validate_license()
+        if not is_valid:
+            click.secho(f"\n❌ {license_msg}", fg="red", err=True)
+            click.secho(
+                "  Authentication completed but no valid license was issued.",
+                fg="yellow", err=True,
+            )
+            click.secho(
+                "  Contact support@aitherium.com if this persists.",
+                fg="yellow", err=True,
+            )
+            sys.exit(1)
+        click.secho(f"\n  Continuing your command...\n", fg="cyan")
+
     if is_valid and verbose:
         click.secho(f"✅ {license_msg}", fg="green")
     
