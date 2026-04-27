@@ -1,43 +1,47 @@
 # Developer Guide: Building Agents for AitherShell
 
-> Learn how to extend AitherShell with custom agents, plugins, and skills using the **Aither** Agent Framework.
+> Learn how to extend AitherShell with custom agents, plugins, and skills using the **AitherSDK** Agent Framework.
 
 ## Overview
 
-**AitherShell** is the end-user interface for the Aitherium platform. Developers extend it by building **agents** using the **Aither** framework.
+**AitherShell** is the end-user interface for the Aitherium platform. Developers extend it by building **agents** using the **AitherSDK** framework.
 
-### Two Repositories
+### Two Repositories, Two CLIs
 
-| Repository | Purpose | Audience | Location |
-|---|---|---|---|
-| **[aitherium/aither](https://github.com/aitherium/aither)** | Agent Framework Dev Kit | Developers | https://github.com/aitherium/aither |
-| **[aitherium/aithershell](https://github.com/aitherium/aithershell)** | End-user CLI shell | Users & Operators | https://github.com/aitherium/aithershell |
+| Repository | Purpose | Audience | CLI Commands | Location |
+|---|---|---|---|---|
+| **[aitherium/aithersdk](https://github.com/aitherium/aithersdk)** | Agent Framework Dev Kit | Developers | `aither new-agent`, `aither test`, `aither run` | https://github.com/aitherium/aithersdk |
+| **[aitherium/aithershell](https://github.com/aitherium/aithershell)** | End-user CLI shell | Users & Operators | `aither shell`, `aither prompt` | https://github.com/aitherium/aithershell |
+
+**Note:** Both use the `aither` command, but serve different purposes. AitherSDK is for development; AitherShell is for production.
 
 ### The Workflow
 
 ```
 Developer
     ↓
-1. Uses Aither framework (aitherium/aither)
-   - Writes agent logic
-   - Implements skills
-   - Builds plugins
+1. Uses AitherSDK framework (aitherium/aithersdk)
+   - Writes agent logic with `aither new-agent`
+   - Implements skills and plugins
+   - Tests locally with `aither test` and `aither run`
+   - Builds and validates with developer CLI
     ↓
 2. Registers agent with AitherShell or Aitherium platform
+   - `aither register` (from AitherSDK)
     ↓
 3. End User
-   - Runs `aither prompt "query"`
+   - Runs `aither prompt "query"` (from AitherShell)
    - Agent executes behind the scenes
    - Results streamed to terminal
 ```
 
-## Setting Up Aither Development
+## Setting Up AitherSDK Development
 
-### 1. Clone Aither Repository
+### 1. Clone AitherSDK Repository
 
 ```bash
-git clone https://github.com/aitherium/aither.git
-cd aither
+git clone https://github.com/aitherium/aithersdk.git
+cd aithersdk
 ```
 
 ### 2. Install in Development Mode
@@ -46,23 +50,24 @@ cd aither
 python -m venv venv
 source venv/bin/activate  # or venv\Scripts\activate on Windows
 
-# Install Aither with development dependencies
+# Install AitherSDK with development dependencies
 pip install -e ".[dev]"
 
 # Install AitherShell to test integration
 pip install aithershell
 ```
 
-### 3. Understand Aither Structure
+### 3. Understand AitherSDK Structure
 
 ```
-aither/
-├── aither/
+aithersdk/
+├── aithersdk/
 │   ├── agent.py          # Base Agent class
 │   ├── skill.py          # Skill decorator & framework
 │   ├── plugin.py         # Plugin system
 │   ├── capability.py     # Capability model (security)
 │   └── ...
+├── cli/                  # Developer CLI (aither command)
 ├── examples/             # Example agents
 │   ├── research_agent.py
 │   ├── code_analyzer.py
@@ -77,7 +82,7 @@ aither/
 
 ```python
 # my_agent.py
-from aither import Agent, Capability, Skill
+from aithersdk import Agent, Capability, Skill
 
 class MyAgent(Agent):
     """Description of what your agent does."""
@@ -112,7 +117,7 @@ class MyAgent(Agent):
 ### Step 2: Register with AitherShell
 
 ```bash
-# After your agent is built and tested:
+# After your agent is built and tested with AitherSDK:
 aither register my_agent.py --name "my-agent"
 ```
 
@@ -127,13 +132,38 @@ agent_registry.register(MyAgent)
 ### Step 3: Test with AitherShell
 
 ```bash
-# Query the agent via shell
-aither prompt "What patterns are in this code?" --agent my-agent
+# Query the agent via AitherShell
+aither prompt "analyze 'def hello(): pass'" --agent my-agent
 
 # Or interactive mode
 aither shell
 > /use my-agent
 > analyze "def hello(): pass"
+```
+
+## AitherSDK vs AitherShell CLI
+
+Both products use the `aither` command, but for different purposes:
+
+**AitherSDK CLI** (for developers - build and test):
+```bash
+aither new-agent my-agent          # Create agent from template
+aither test                        # Run unit tests locally
+aither run my_agent.py             # Execute agent locally
+aither debug my_agent.py           # Interactive debugging
+aither validate my_agent.py        # Validate schema
+aither register my_agent.py        # Register with platform
+aither publish                     # Publish to registry
+```
+
+**AitherShell CLI** (for end users - run and query):
+```bash
+aither shell                       # Interactive shell
+aither prompt "query"              # One-off query
+aither prompt "query" --agent xyz  # Use specific agent
+aither plugins list                # List available agents
+aither config                      # Configure shell
+aither export                      # Export results
 ```
 
 ## Agent Anatomy
@@ -143,7 +173,7 @@ aither shell
 Capabilities control what your agent can access:
 
 ```python
-from aither import Capability
+from aithersdk import Capability
 
 capabilities = [
     # Read-only capabilities
@@ -164,7 +194,7 @@ capabilities = [
 Skills are the agent's actions:
 
 ```python
-from aither import Skill
+from aithersdk import Skill
 
 @Skill(
     name="investigate",
@@ -438,17 +468,17 @@ aither profile --agent my-agent --skill analyze --input "code.py"
 
 ## Next Steps
 
-1. **Read Aither Docs** — Full API at https://github.com/aitherium/aither/docs
-2. **Explore Examples** — Study agents at https://github.com/aitherium/aither/examples
-3. **Join Community** — Discuss at https://github.com/aitherium/aither/discussions
+1. **Read AitherSDK Docs** — Full API at https://github.com/aitherium/aithersdk/docs
+2. **Explore Examples** — Study agents at https://github.com/aitherium/aithersdk/examples
+3. **Join Community** — Discuss at https://github.com/aitherium/aithersdk/discussions
 4. **Build & Share** — Create your agent and submit to registry
 
 ## Support
 
-- **Questions:** Open issue on [aitherium/aither](https://github.com/aitherium/aither)
-- **Bugs:** Report on agent repo (or Aither if framework issue)
-- **Ideas:** Discuss in [Aither discussions](https://github.com/aitherium/aither/discussions)
+- **Questions:** Open issue on [aitherium/aithersdk](https://github.com/aitherium/aithersdk)
+- **Bugs:** Report on agent repo (or AitherSDK if framework issue)
+- **Ideas:** Discuss in [AitherSDK discussions](https://github.com/aitherium/aithersdk/discussions)
 
 ---
 
-**Get started:** Clone [aitherium/aither](https://github.com/aitherium/aither) and build your first agent! 🚀
+**Get started:** Clone [aitherium/aithersdk](https://github.com/aitherium/aithersdk) and build your first agent! 🚀
