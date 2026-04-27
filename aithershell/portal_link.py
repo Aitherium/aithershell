@@ -23,17 +23,15 @@ from aithershell.config import AitherConfig, save_config
 
 
 PORTAL_BASE_DEFAULT = "https://portal.aitherium.com"
-GATEWAY_BASE_DEFAULT = "https://gateway.aitherium.com"
-DEVICE_CODE_PATH = "/v1/auth/device/code"
-DEVICE_POLL_PATH = "/v1/auth/device/poll"
+DEVICE_CODE_PATH = "/api/auth/device/code"
+DEVICE_POLL_PATH = "/api/auth/device/poll"
 LINK_PAGE_PATH = "/link"
 
 
 async def _request_device_code(
-    gateway_url: str,
     portal_url: str,
 ) -> Optional[Tuple[str, str, int, str]]:
-    """Ask gateway for a device code.
+    """Ask portal for a device code.
 
     Returns (device_code, user_code, interval, verification_uri_complete)
     or None if endpoint unavailable.
@@ -41,12 +39,11 @@ async def _request_device_code(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
-                f"{gateway_url}{DEVICE_CODE_PATH}",
+                f"{portal_url}{DEVICE_CODE_PATH}",
                 json={"client_name": "AitherShell", "scopes": ["read", "write", "agent"]},
             )
             if r.status_code == 200:
                 data = r.json()
-                # Prefer gateway-supplied URL; fall back to local construction.
                 vuri = data.get("verification_uri_complete") or (
                     f"{portal_url}{LINK_PAGE_PATH}?code={data['user_code']}"
                 )
@@ -62,7 +59,7 @@ async def _request_device_code(
 
 
 async def _poll_for_token(
-    gateway_url: str, device_code: str, interval: int, timeout_s: int = 600
+    portal_url: str, device_code: str, interval: int, timeout_s: int = 600
 ) -> Optional[dict]:
     """Poll until user approves and we get credentials.
 
@@ -74,7 +71,7 @@ async def _poll_for_token(
         while time.time() < deadline:
             try:
                 r = await client.post(
-                    f"{gateway_url}{DEVICE_POLL_PATH}",
+                    f"{portal_url}{DEVICE_POLL_PATH}",
                     json={"device_code": device_code},
                 )
                 if r.status_code == 200:
@@ -100,7 +97,6 @@ def _open_browser(url: str) -> None:
 async def link_portal_async(
     cfg: AitherConfig,
     portal_url: str = PORTAL_BASE_DEFAULT,
-    gateway_url: str = GATEWAY_BASE_DEFAULT,
 ) -> bool:
     """Run the device-code flow and persist the API key.
 
@@ -109,8 +105,7 @@ async def link_portal_async(
     """
     click.secho(f"\n→ Linking AitherShell to {portal_url}", fg="cyan")
 
-    # Try device flow (against gateway, which is the dynamic API surface)
-    code_info = await _request_device_code(gateway_url, portal_url)
+    code_info = await _request_device_code(portal_url)
 
     if code_info:
         device_code, user_code, interval, link_url = code_info
@@ -127,7 +122,7 @@ async def link_portal_async(
 
         click.secho("\n  Waiting for approval (Ctrl+C to cancel)...", fg="white")
         try:
-            creds = await _poll_for_token(gateway_url, device_code, interval)
+            creds = await _poll_for_token(portal_url, device_code, interval)
         except KeyboardInterrupt:
             click.secho("\n  Cancelled.", fg="yellow")
             return False
@@ -213,7 +208,9 @@ def _save_license(license_key: str) -> None:
 
 
 def link_portal(cfg: AitherConfig, portal_url: str = PORTAL_BASE_DEFAULT) -> bool:
-    """Sync wrapper for CLI use."""
+    """Sync wrapper for CLI use. Honors AITHER_PORTAL_URL env var override."""
+    import os
+    portal_url = os.environ.get("AITHER_PORTAL_URL", portal_url).rstrip("/")
     return asyncio.run(link_portal_async(cfg, portal_url))
 
 
