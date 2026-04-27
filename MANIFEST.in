@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include setup.py
+include setup.cfg
+include pyproject.toml
+recursive-include aithershell *.py
+recursive-include aithershell/plugins *.yaml *.py
+recursive-include examples *.py *.yaml
+recursive-include tests *.py
+recursive-exclude * __pycache__
+recursive-exclude * *.pyc
+recursive-exclude * .pytest_cache

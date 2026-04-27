@@ -1,0 +1,10 @@
+# hello.aither — Simple demo script
+# Run with: aither --run hello.aither
+
+@effort 2
+
+Hello! Who are you? One sentence.
+
+What can you help me with? Brief list.
+
+Summarize what you just said in 10 words: {{$PREV}}

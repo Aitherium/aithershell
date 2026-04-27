@@ -1,0 +1,17 @@
+# code-review.aither — Automated code review pipeline
+# Run with: aither --run code-review.aither --var FILE=path/to/file.py
+
+@effort 7
+@system You are a senior code reviewer. Be concise and actionable.
+
+Review this code for bugs, security issues, and improvements: {{FILE}}
+
+@if {{$PREV}} contains security
+    Expand on the security issues you found. Provide fixes.
+@end
+
+@if {{$PREV}} contains performance
+    Suggest specific performance optimizations with code examples.
+@end
+
+Rate the code quality 1-10 and explain: {{$PREV}}

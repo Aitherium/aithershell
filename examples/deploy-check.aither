@@ -1,0 +1,17 @@
+# deploy-check.aither — Pre-deployment verification
+# Run with: aither --run deploy-check.aither --var ENV=staging
+
+@effort 5
+@set ENV=production
+
+Check the health of all AitherOS services. Which are down?
+
+@if {{$PREV}} contains unhealthy
+    What's the likely root cause and fix for the unhealthy services?
+@end
+
+@for check in security performance memory
+    Run a {{check}} check on the {{ENV}} environment. Brief findings.
+@end
+
+Give me a go/no-go recommendation for deploying to {{ENV}} based on: {{$PREV}}

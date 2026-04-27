@@ -1,0 +1,9 @@
+# Example YAML Plugin — drop this in ~/.aither/plugins/
+name: status
+description: Show AitherOS system status
+aliases: [st, sys]
+action:
+  type: api
+  method: GET
+  url: "{genesis}/health"
+output: json

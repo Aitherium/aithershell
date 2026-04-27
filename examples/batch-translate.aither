@@ -1,0 +1,9 @@
+# batch-translate.aither — Translate text to multiple languages
+# Run with: aither --run batch-translate.aither --var TEXT="Hello world"
+
+@effort 3
+@set TEXT=Hello, how are you today?
+
+@for lang in Spanish French Japanese Korean Arabic
+    Translate "{{TEXT}}" to {{lang}}. Reply with ONLY the translation.
+@end

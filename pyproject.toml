@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aithershell"
+version = "0.1.0"
+description = "AitherShell - The kernel shell for AitherOS"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Aitherium", email = "alex@aitherium.com" }]
+
+dependencies = [
+    "httpx>=0.26.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "argcomplete>=3.0",
+    "click>=8.0",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.20.0",
+]
+
+[project.optional-dependencies]
+voice = ["sounddevice", "numpy", "webrtcvad"]
+all = ["aithershell[voice]"]
+
+[project.scripts]
+aither = "aithershell.cli:entry"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aithershell"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = "test_*.py"
+
