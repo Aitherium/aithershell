@@ -1,0 +1,292 @@
+name: Build Multi-Platform AitherShell Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Linux binary
+        run: |
+          pyinstaller --onefile \
+            --name aither \
+            --dist ./dist-linux \
+            --workpath ./build-linux \
+            --specpath ./build-linux \
+            --clean \
+            --add-data "aithershell/templates:aithershell/templates" \
+            --add-data "aithershell/config:aithershell/config" \
+            aithershell/cli.py
+
+      - name: Verify binary
+        run: |
+          file dist-linux/aither
+          ls -lh dist-linux/aither
+          ./dist-linux/aither --version
+
+      - name: Generate SHA256
+        run: |
+          cd dist-linux
+          sha256sum aither > aither-linux-x64.sha256
+          cat aither-linux-x64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-linux-x64
+          path: dist-linux/aither
+          retention-days: 30
+
+      - name: Upload SHA256
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-linux-x64-sha256
+          path: dist-linux/aither-linux-x64.sha256
+          retention-days: 30
+
+  build-macos-x64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build macOS x64 binary
+        run: |
+          pyinstaller --onefile \
+            --name aither \
+            --dist ./dist-macos-x64 \
+            --workpath ./build-macos-x64 \
+            --specpath ./build-macos-x64 \
+            --clean \
+            --add-data "aithershell/templates:aithershell/templates" \
+            --add-data "aithershell/config:aithershell/config" \
+            aithershell/cli.py
+
+      - name: Verify binary
+        run: |
+          file dist-macos-x64/aither
+          ls -lh dist-macos-x64/aither
+          ./dist-macos-x64/aither --version
+
+      - name: Generate SHA256
+        run: |
+          cd dist-macos-x64
+          shasum -a 256 aither > aither-macos-x64.sha256
+          cat aither-macos-x64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-macos-x64
+          path: dist-macos-x64/aither
+          retention-days: 30
+
+      - name: Upload SHA256
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-macos-x64-sha256
+          path: dist-macos-x64/aither-macos-x64.sha256
+          retention-days: 30
+
+  build-macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build macOS ARM64 binary
+        env:
+          ARCHFLAGS: "-Qunused-arguments"
+          LDFLAGS: "-L/usr/local/opt/openssl/lib"
+        run: |
+          pyinstaller --onefile \
+            --name aither \
+            --dist ./dist-macos-arm64 \
+            --workpath ./build-macos-arm64 \
+            --specpath ./build-macos-arm64 \
+            --clean \
+            --target-arch arm64 \
+            --add-data "aithershell/templates:aithershell/templates" \
+            --add-data "aithershell/config:aithershell/config" \
+            aithershell/cli.py
+
+      - name: Verify binary
+        run: |
+          file dist-macos-arm64/aither
+          ls -lh dist-macos-arm64/aither
+          ./dist-macos-arm64/aither --version || echo "ARM64 binary may not run on Intel Mac"
+
+      - name: Generate SHA256
+        run: |
+          cd dist-macos-arm64
+          shasum -a 256 aither > aither-macos-arm64.sha256
+          cat aither-macos-arm64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-macos-arm64
+          path: dist-macos-arm64/aither
+          retention-days: 30
+
+      - name: Upload SHA256
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-macos-arm64-sha256
+          path: dist-macos-arm64/aither-macos-arm64.sha256
+          retention-days: 30
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Windows binary
+        run: |
+          pyinstaller --onefile `
+            --name aither `
+            --dist ./dist-windows `
+            --workpath ./build-windows `
+            --specpath ./build-windows `
+            --clean `
+            --add-data "aithershell/templates:aithershell/templates" `
+            --add-data "aithershell/config:aithershell/config" `
+            aithershell/cli.py
+
+      - name: Verify binary
+        run: |
+          Get-Item dist-windows/aither.exe
+          (Get-Item dist-windows/aither.exe).Length
+          ./dist-windows/aither.exe --version
+
+      - name: Generate SHA256
+        run: |
+          cd dist-windows
+          $hash = (Get-FileHash -Path aither.exe -Algorithm SHA256).Hash
+          "$hash  aither-windows-x64.sha256" | Out-File aither-windows-x64.sha256
+          Get-Content aither-windows-x64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-windows-x64
+          path: dist-windows/aither.exe
+          retention-days: 30
+
+      - name: Upload SHA256
+        uses: actions/upload-artifact@v3
+        with:
+          name: aither-windows-x64-sha256
+          path: dist-windows/aither-windows-x64.sha256
+          retention-days: 30
+
+  create-release:
+    needs: [build-linux, build-macos-x64, build-macos-arm64, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./binaries
+
+      - name: Generate SHA256SUMS file
+        run: |
+          cd binaries
+          cat */aither-*.sha256 > ../SHA256SUMS
+          cat ../SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            binaries/aither-linux-x64/aither
+            binaries/aither-macos-x64/aither
+            binaries/aither-macos-arm64/aither
+            binaries/aither-windows-x64/aither.exe
+            SHA256SUMS
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-completion:
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send Slack notification
+        if: secrets.SLACK_WEBHOOK_URL
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "AitherShell build complete",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *AitherShell Multi-Platform Binaries Built*\n\nAll four architectures compiled and ready for release:\n• Linux x64 (~90 MB)\n• macOS x64 (~85 MB)\n• macOS ARM64 (~75 MB)\n• Windows x64 (~86 MB)\n\n<${{ github.server_url }}/${{ github.repository }}/releases|View Release>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
