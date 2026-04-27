@@ -30,6 +30,22 @@ aither --version
 aither prompt "What is AitherOS?"
 ```
 
+## Relationship to Aither Framework
+
+**AitherShell** is the end-user CLI. **Developers** extend it by building agents using the **Aither** framework.
+
+```
+Developer (uses Aither) → Builds agents → Registers with platform
+                                              ↓
+End User (uses AitherShell) → Runs agents via `aither prompt`
+```
+
+**Learn more:** See [DEVELOPER-GUIDE.md](./DEVELOPER-GUIDE.md) for building custom agents with Aither.
+
+For complete ecosystem overview: [Aitherium Ecosystem](../.AITHERIUM/ECOSYSTEM-PRODUCTS.md)
+
+---
+
 ## Features
 
 🚀 **Autonomous Agent Orchestration**
