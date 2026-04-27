@@ -25,6 +25,25 @@ PRIVATE_DIR = CONFIG_DIR / "private"
 
 
 @dataclass
+class BackendConfig:
+    """Single backend (local or cloud) config."""
+    type: str = "ollama"  # ollama | portal | genesis | openai
+    url: str = ""
+    model: str = ""
+    api_key: str = ""
+    max_effort: int = 10  # only route to this backend for effort <= max_effort
+
+
+@dataclass
+class RoutingConfig:
+    """Effort-based routing config."""
+    mode: str = "hybrid"          # hybrid | local_only | cloud_only | genesis_only
+    effort_threshold: int = 6      # effort > threshold → cloud
+    timeout_seconds: int = 120     # local timeout → fallback to cloud
+    fallback_on_error: bool = True # local error → try cloud
+
+
+@dataclass
 class AitherConfig:
     """Shell configuration with layered resolution."""
 
@@ -48,6 +67,8 @@ class AitherConfig:
     effort: Optional[int] = None
     safety_level: str = "professional"
     max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    privacy_level: str = "public"
 
     # Behavior
     stream: bool = True
@@ -67,14 +88,115 @@ class AitherConfig:
     # Plugins
     plugin_dirs: list = field(default_factory=lambda: [str(PLUGINS_DIR)])
 
+    # ========== Local Onramp (v1.1) ==========
+    # Backend definitions
+    backends: Dict[str, Any] = field(default_factory=lambda: {
+        "local": {
+            "type": "ollama",
+            "url": "http://localhost:11434",
+            "model": "nemotron-orchestrator:8b",
+            "max_effort": 6,
+        },
+        "cloud": {
+            "type": "portal",
+            "url": "https://api.aitherium.com",
+            "api_key": "",
+            "model": "auto",
+            "max_effort": 10,
+        },
+        "genesis": {
+            "type": "genesis",
+            "url": "https://localhost:8001",
+            "model": "auto",
+            "max_effort": 10,
+        },
+    })
+
+    # Routing
+    routing: Dict[str, Any] = field(default_factory=lambda: {
+        "mode": "hybrid",
+        "effort_threshold": 6,
+        "timeout_seconds": 120,
+        "fallback_on_error": True,
+    })
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def get_backend(self, name: str) -> BackendConfig:
+        """Get a backend config by name."""
+        data = self.backends.get(name, {})
+        return BackendConfig(
+            type=data.get("type", "ollama"),
+            url=data.get("url", ""),
+            model=data.get("model", ""),
+            api_key=data.get("api_key", ""),
+            max_effort=data.get("max_effort", 10),
+        )
+
+    def select_backend(self, effort: int, force: Optional[str] = None) -> tuple[str, BackendConfig]:
+        """Select backend based on effort level and routing mode.
+
+        Args:
+            effort: 1-10 effort level for the request
+            force: Force a specific backend name ('local', 'cloud', 'genesis'), bypassing routing
+
+        Returns:
+            (backend_name, BackendConfig)
+        """
+        if force:
+            return force, self.get_backend(force)
+
+        mode = self.routing.get("mode", "hybrid")
+        threshold = self.routing.get("effort_threshold", 6)
+
+        if mode == "local_only":
+            return "local", self.get_backend("local")
+        if mode == "cloud_only":
+            return "cloud", self.get_backend("cloud")
+        if mode == "genesis_only":
+            return "genesis", self.get_backend("genesis")
+
+        # hybrid: effort decides
+        if effort <= threshold:
+            local = self.get_backend("local")
+            if local.url and local.model:
+                return "local", local
+            # local not configured → fallback to cloud
+        return "cloud", self.get_backend("cloud")
 
 
 def _ensure_dirs():
     """Create config directories if needed."""
     for d in [CONFIG_DIR, PLUGINS_DIR, PRIVATE_DIR]:
         d.mkdir(parents=True, exist_ok=True)
+
+
+def save_config(cfg: AitherConfig) -> None:
+    """Persist config back to ~/.aither/config.yaml.
+
+    Preserves any unknown keys in the existing file.
+    """
+    _ensure_dirs()
+    # Read existing
+    existing: Dict[str, Any] = {}
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                existing = yaml.safe_load(f) or {}
+        except Exception:
+            existing = {}
+
+    # Merge: cfg fields take precedence
+    data = cfg.to_dict()
+    existing.update(data)
+
+    # Strip transient fields we don't want persisted
+    for k in ("auth_token", "auth_user", "session_id"):
+        existing.pop(k, None)
+
+    with open(CONFIG_FILE, "w") as f:
+        yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
 
 
 def load_config() -> AitherConfig:

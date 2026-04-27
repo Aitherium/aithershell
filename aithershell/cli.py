@@ -27,6 +27,7 @@ from aithershell.shell import run_repl
 from aithershell.commands import execute_command, CommandError
 from aithershell.genesis_client import GenesisClient, GenesisError
 from aithershell.license import validate_license, enforce_license, get_tier
+from aithershell.ollama_client import OllamaClient, OllamaError, model_for_effort
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,11 @@ def setup_logging(verbose: bool = False):
 @click.option("--max-tokens", type=int, help="Maximum tokens in response")
 @click.option("--temperature", type=click.FloatRange(0.0, 2.0), help="Sampling temperature")
 @click.option("--verbose", is_flag=True, help="Verbose logging")
-@click.option("--init", is_flag=True, help="Initialize shell config")
+@click.option("--init", is_flag=True, help="Run setup wizard (`aither init`)")
+@click.option("--link", is_flag=True, help="Link to AitherOS Portal for cloud fallback")
+@click.option("--local", "force_backend", flag_value="local", help="Force local backend (Ollama)")
+@click.option("--cloud", "force_backend", flag_value="cloud", help="Force cloud backend (Portal)")
+@click.option("--genesis", "force_backend", flag_value="genesis", help="Force Genesis backend")
 @click.option("--config", is_flag=True, help="Show configuration")
 @click.option("--plugins", is_flag=True, help="List plugins")
 @click.option("--status", is_flag=True, help="Check Genesis health")
@@ -76,6 +81,8 @@ def cli(
     temperature,
     verbose,
     init,
+    link,
+    force_backend,
     config,
     plugins,
     status,
@@ -99,7 +106,7 @@ def cli(
     
     # Check license first (before any other action)
     is_valid, license_msg = validate_license()
-    if not is_valid and not (init or completions):
+    if not is_valid and not (init or link or completions):
         click.secho(f"❌ {license_msg}", fg="red", err=True)
         click.secho("Get your license at: https://aitherium.com/free", fg="yellow", err=True)
         sys.exit(1)
@@ -139,9 +146,16 @@ def cli(
         return
     
     if init:
-        _init_shell()
+        from aithershell.commands_local.init_cmd import run_init
+        sys.exit(run_init())
         return
-    
+
+    if link:
+        from aithershell.commands_local.link_portal import link_portal
+        ok = link_portal(aither_config)
+        sys.exit(0 if ok else 1)
+        return
+
     if config:
         asyncio.run(_cmd_config(aither_config))
         return
@@ -162,7 +176,7 @@ def cli(
     if query:
         # Single query mode
         query_text = " ".join(query)
-        asyncio.run(_cmd_query(aither_config, query_text, output_format))
+        asyncio.run(_cmd_query(aither_config, query_text, output_format, force_backend))
     else:
         # Interactive REPL
         try:
@@ -175,57 +189,136 @@ async def _cmd_query(
     config: AitherConfig,
     query: str,
     output_format: Optional[str],
+    force_backend: Optional[str] = None,
 ) -> None:
-    """Execute a single query.
-    
-    Args:
-        config: Configuration
-        query: User query
-        output_format: Output format (text, json, or None)
+    """Execute a single query with effort-based routing.
+
+    Routing decision (when no --local/--cloud/--genesis flag):
+      * effort <= config.routing.effort_threshold → local Ollama
+      * else → cloud (Portal) or Genesis depending on which is configured
+    Falls back to cloud on local errors if config.routing.fallback_on_error.
     """
+    effort = config.effort if config.effort is not None else 5
+    backend_name, backend = config.select_backend(effort, force=force_backend)
+
+    show_routing = output_format != "json"
+    if show_routing and config.show_metadata:
+        click.secho(f"[{backend_name}:{backend.model or 'auto'}] ", fg="bright_black", err=True, nl=False)
+
     try:
-        client = GenesisClient(base_url=config.url)
-        response = ""
-        
-        try:
-            async for chunk in client.chat_stream(
-                message=query,
-                persona=config.persona,
-                effort=config.effort,
-                model=config.model,
-                max_tokens=config.max_tokens,
-                safety_level=config.safety_level,
-                private_mode=getattr(config, "privacy_level", "public") == "private",
-            ):
-                response += chunk
-                if config.stream and output_format != "json":
-                    print(chunk, end="", flush=True)
-            
-            if config.stream and output_format != "json":
-                print()
-            
-            if output_format == "json":
-                # Return structured response
-                result = {
-                    "status": "success",
-                    "response": response,
-                    "persona": config.persona,
-                    "effort": config.effort,
-                    "model": config.model,
-                }
-                print(json.dumps(result, indent=2))
-            elif not config.stream:
-                print(response)
-        
-        finally:
-            await client.close()
-    
-    except GenesisError as e:
-        if output_format == "json":
-            print(json.dumps({"status": "error", "error": str(e)}, indent=2))
+        if backend.type == "ollama":
+            await _query_ollama(config, backend, query, output_format, effort)
         else:
-            print(f"[ERROR] {e.message}", file=sys.stderr)
+            # Portal (cloud) or Genesis: both use the GenesisClient HTTP path
+            await _query_genesis(config, backend, query, output_format)
+    except OllamaError as e:
+        # Local failed → try fallback
+        if config.routing.get("fallback_on_error", True) and not force_backend:
+            click.secho(
+                f"\n  ⚠ Local backend failed ({e}). Falling back to cloud...",
+                fg="yellow", err=True,
+            )
+            cloud = config.get_backend("cloud")
+            if cloud.url and cloud.api_key:
+                try:
+                    await _query_genesis(config, cloud, query, output_format)
+                    return
+                except GenesisError as ge:
+                    _print_error(ge.message, output_format)
+                    sys.exit(1)
+        _print_error(str(e), output_format)
         sys.exit(1)
+    except GenesisError as e:
+        _print_error(e.message, output_format)
+        sys.exit(1)
+
+
+async def _query_ollama(
+    config: AitherConfig,
+    backend,
+    query: str,
+    output_format: Optional[str],
+    effort: int,
+) -> None:
+    """Stream from local Ollama."""
+    model = config.model or backend.model or model_for_effort(effort)
+    timeout = config.routing.get("timeout_seconds", 120)
+    client = OllamaClient(backend.url, timeout=float(timeout))
+    response = ""
+    try:
+        async for chunk in client.chat_stream(
+            model=model,
+            message=query,
+            temperature=config.temperature if config.temperature is not None else 0.7,
+            max_tokens=config.max_tokens,
+        ):
+            response += chunk
+            if config.stream and output_format != "json":
+                print(chunk, end="", flush=True)
+
+        if config.stream and output_format != "json":
+            print()
+
+        if output_format == "json":
+            print(json.dumps({
+                "status": "success",
+                "response": response,
+                "backend": "local",
+                "model": model,
+                "effort": effort,
+            }, indent=2))
+        elif not config.stream:
+            print(response)
+    finally:
+        await client.close()
+
+
+async def _query_genesis(
+    config: AitherConfig,
+    backend,
+    query: str,
+    output_format: Optional[str],
+) -> None:
+    """Stream from cloud Portal or Genesis (both speak the same HTTP API)."""
+    base_url = backend.url or config.url
+    client = GenesisClient(base_url=base_url)
+    response = ""
+    try:
+        async for chunk in client.chat_stream(
+            message=query,
+            persona=config.persona,
+            effort=config.effort,
+            model=config.model or backend.model,
+            max_tokens=config.max_tokens,
+            safety_level=config.safety_level,
+            private_mode=getattr(config, "privacy_level", "public") == "private",
+        ):
+            response += chunk
+            if config.stream and output_format != "json":
+                print(chunk, end="", flush=True)
+
+        if config.stream and output_format != "json":
+            print()
+
+        if output_format == "json":
+            print(json.dumps({
+                "status": "success",
+                "response": response,
+                "backend": backend.type,
+                "model": config.model or backend.model,
+                "effort": config.effort,
+            }, indent=2))
+        elif not config.stream:
+            print(response)
+    finally:
+        await client.close()
+
+
+def _print_error(msg: str, output_format: Optional[str]) -> None:
+    if output_format == "json":
+        print(json.dumps({"status": "error", "error": msg}, indent=2))
+    else:
+        print(f"[ERROR] {msg}", file=sys.stderr)
 
 
 async def _cmd_config(config: AitherConfig) -> None:
