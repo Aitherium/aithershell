@@ -26,6 +26,7 @@ from aithershell.config import save_default_config, load_config, AitherConfig
 from aithershell.shell import run_repl
 from aithershell.commands import execute_command, CommandError
 from aithershell.genesis_client import GenesisClient, GenesisError
+from aithershell.license import validate_license, enforce_license, get_tier
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,16 @@ def cli(
         aither --status                     # Check Genesis health
     """
     setup_logging(verbose)
+    
+    # Check license first (before any other action)
+    is_valid, license_msg = validate_license()
+    if not is_valid and not (init or completions):
+        click.secho(f"❌ {license_msg}", fg="red", err=True)
+        click.secho("Get your license at: https://aitherium.com/free", fg="yellow", err=True)
+        sys.exit(1)
+    
+    if is_valid and verbose:
+        click.secho(f"✅ {license_msg}", fg="green")
     
     # Load config
     save_default_config()
