@@ -43,7 +43,7 @@ async def _request_device_code(
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
                 f"{idp_url}{DEVICE_CODE_PATH}",
-                json={"client_name": "AitherShell", "scopes": ["read", "write", "agent"]},
+                json={"client_name": "AitherShell", "scopes": "full"},
             )
             if r.status_code == 200:
                 data = r.json()
