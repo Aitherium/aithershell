@@ -16,7 +16,7 @@ setup(
     author="Aitherium",
     author_email="alex@aitherium.com",
     url="https://github.com/aitherium/aithershell",
-    license="MIT",
+    license="Proprietary",
     packages=find_packages(exclude=["tests", "examples"]),
     python_requires=">=3.10",
     install_requires=[

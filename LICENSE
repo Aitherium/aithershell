@@ -1,21 +1,43 @@
-MIT License
+PROPRIETARY LICENSE
 
-Copyright (c) 2026 Aitherium
+Copyright (c) 2026 Aitherium Inc. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+RESTRICTED USE
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This software (AitherShell) is proprietary and confidential. Unauthorized copying,
+modification, distribution, or use of this software is strictly prohibited without
+explicit written permission from Aitherium Inc.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+PERMITTED USE
+
+You may use this software only if you:
+1. Have a valid license agreement with Aitherium Inc.
+2. Have received an HMAC-SHA256 signed license key
+3. Comply with the terms of your specific license tier (SaaS, Enterprise, etc.)
+
+RESTRICTIONS
+
+You may NOT:
+- Reverse engineer, decompile, or disassemble the software
+- Create derivative works or modifications
+- Distribute, sublicense, or rent the software
+- Use the software for competitive purposes
+- Remove or alter license notices or proprietary marks
+
+TERMINATION
+
+Aitherium Inc. may terminate your license immediately if you breach any term of
+this agreement. Upon termination, you must destroy all copies of the software.
+
+NO WARRANTY
+
+THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. AITHERIUM INC.
+DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING ANY WARRANTY OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT.
+
+LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL AITHERIUM INC. BE LIABLE FOR ANY CONSEQUENTIAL, SPECIAL,
+INDIRECT, INCIDENTAL, OR PUNITIVE DAMAGES.
+
+For licensing inquiries: license@aitherium.com

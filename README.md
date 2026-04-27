@@ -4,23 +4,31 @@
 
 [![PyPI](https://img.shields.io/pypi/v/aithershell)](https://pypi.org/project/aithershell/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](./LICENSE)
 [![Tests](https://github.com/aitherium/aithershell/actions/workflows/publish.yml/badge.svg)](https://github.com/aitherium/aithershell/actions)
 
 ## Quick Start
 
-### Installation
+### Installation (License Key Required)
+
+AitherShell is proprietary software. Valid license key required.
 
 ```bash
-# via pip
+# Set license key
+export AITHERIUM_LICENSE_KEY="your-license-key-here"
+
+# via pip (requires PyPI authentication)
 pip install aithershell
 
-# via Homebrew (coming soon)
-brew install aithershell
-
 # via Docker
-docker run aitherium/aithershell:latest aither --help
+docker run -e AITHERIUM_LICENSE_KEY="..." aitherium/aithershell:latest aither --help
 ```
+
+### Get a License
+
+- **Free Tier:** https://aitherium.com/free (limited features)
+- **Pro:** https://aitherium.com/pro (full features)
+- **Enterprise:** sales@aitherium.com (custom licensing)
 
 ### First Command
 
